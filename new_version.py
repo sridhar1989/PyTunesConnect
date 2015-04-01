@@ -1,0 +1,17 @@
+#!/usr/bin/env python
+
+"""
+This script will create a new version on iTunesConnect given a version and release notes.
+"""
+
+import sys
+import PyTunesAPIHandler as pytunes
+
+if __name__ == "__main__":
+
+	# Read version info from command line arguments
+	arguments = sys.argv
+	version = arguments[1]
+	release_notes = arguments[2]
+
+	pytunes.new_version_all_apps(version, release_notes)
