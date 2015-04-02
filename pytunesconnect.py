@@ -4,9 +4,15 @@
 This logs a user into the iTunesConnect portal given a username and password.
 It will return a parsed authentication cookie to be used in future requests.
 """
-
-from urllib.parse import urlencode
-import httplib2
+from __future__ import division, print_function
+try:
+    from urllib.parse import urlencode
+except ImportError:
+    from urllib import urlencode
+try: 
+    import httplib2
+except ImportError:
+    import httplib as httplib2
 import json
 import sys
 
