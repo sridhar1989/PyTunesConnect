@@ -6,7 +6,7 @@ The login credentials will be stored in the home directory, and generally expire
 """
 
 import sys
-import PyTunesAPIHandler as pytunes
+import pytunesconnect as pytunes
 
 if __name__ == "__main__":
 

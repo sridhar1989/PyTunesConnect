@@ -5,7 +5,7 @@ This script will create a new version on iTunesConnect given a version and relea
 """
 
 import sys
-import PyTunesAPIHandler as pytunes
+import pytunesconnect as pytunes
 
 if __name__ == "__main__":
 
