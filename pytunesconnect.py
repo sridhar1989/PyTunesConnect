@@ -1,149 +1,361 @@
-#!/usr/bin/env python
-
-"""
-This logs a user into the iTunesConnect portal given a username and password.
-It will return a parsed authentication cookie to be used in future requests.
-"""
-from __future__ import division, print_function
-try:
-    from urllib.parse import urlencode
-except ImportError:
-    from urllib import urlencode
-try: 
-    import httplib2
-except ImportError:
-    import httplib as httplib2
+# standard library
 import json
-import sys
+import datetime
+import re
+import time
+import shutil
 
-global_path = "https://itunesconnect.apple.com/WebObjects/iTunesConnect.woa"
-user_agent = "PyTunesConnect/0.0.1 (Macintosh; OS X/10.10.1) GCDHTTPRequest"
-http = httplib2.Http()
+# third party modules
+from requests import session
+from lxml.html import fromstring, tostring
 
-################################# LOCAL AUTH ####################################
+class PyTunesConnect:
 
-def get_auth_cookie():
-	with open("token.txt", "r") as f:
-		cookie = f.read()
-		return cookie
+    def __init__(self, accountName, password):
+        self.setup_session(accountName,password)
 
-def store_auth_cookie(cookie):
-	with open("token.txt", "w") as f:
-		f.write(cookie)
+        self.headers = headers = {
+                            'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                            'Accept-Encoding':'gzip, deflate, sdch',
+                            'Accept-Language':'en-US,en;q=0.8',
+                            'Connection':'keep-alive',
+                            'Host':'itunesconnect.apple.com',
+                            'Upgrade-Insecure-Requests':1,
+                            'User-Agent':'Mozilla/5.0 (Windows NT 6.3; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36'
+                        }
 
-################################# LOGIN ####################################
+        self.app_analytics_exceptions = {
+                            'appVersion': ['pageViewCount','units','iap','sales','payingUsers'],
+                            'campaignId' : ['crashes'],
+                            'platformVersion' : [],
+                            'platform':[],
+                            'region':['crashes'],
+                            'storefront':['crashes'],
+                            'domainReferrer':['crashes']
+                        }
 
-def parse_cookie_from_response(input):
-	# take raw cookie string and return the usable part
-	# the response cookie is a long string (not valid JSON)
-	# need to extract "ds01", "myacinfo", "wosid", and "woinst"
-	# return value should be formatted as such: "ds01=AAA; myacinfo=BBB; wosid=CCC; woinst=DDD"
-	ds01 = ""
-	myacinfo = ""
-	woinst = ""
-	wosid = ""
-	for si in input.split(";"):
-		if "ds01=" in si:
-			ds01 = si.split("ds01=")[-1]
-		elif "myacinfo=" in si:
-			myacinfo = si.split("myacinfo=")[-1]
-		elif "woinst=" in si:
-			woinst = si.split("woinst=")[-1]
-		elif "wosid=" in si:
-			wosid = si.split("wosid=")[-1]
-	return "ds01={}; myacinfo={}; woinst={}; wosid={}".format(ds01, myacinfo, woinst, wosid)
+        self.app_analytics_measures = {
+            'App Store Views' : 'pageViewCount',
+            'App Units' : 'units',
+            'In-App Purchases' : 'iap',
+            'Sales' : 'sales',
+            'Paying Users' : 'payingUsers',
+            'Installations' : 'installs',
+            'Sessions' : 'sessions',
+            'Active Devices' : 'activeDevices',
+            'Active Last 30 Days' : 'rollingActiveDevices',
+            'Crashes' :  'crashes'
+        }
 
-def login(username, password):
-	url_path = global_path + "/wo/0.0.1.11.3.15.2.1.1.3.1.1"
+        self.app_analytics_dimensions = {
+            'App Version' : 'appVersion',
+            'Campaign' : 'campaignId', # (insufficient data for campaign)
+            'Device' : 'platform',
+            'Platform Version' : 'platformVersion',
+            'Region' : 'region',
+            'Territory' : 'storefront',
+            'Website' : 'domainReferrer'
+        }
 
-	body = { 
-		"theAccountName": username,
-		"theAccountPW": password
-	}
+        self.sales_and_trends_dimensions = {
+            'Territory' : 'piano_location',
+            'Device' : 'platform',
+            'Category' : 'Category',
+            'Content Type' : 'content_type',
+            'Transaction Type' : 'transaction_type',
+            'CMB' : 'purch_type_ext',
+            'Version' : 'version_desc_piano'
+        }
 
-	headers = {
-		"Host": "itunesconnect.apple.com",
-		"Connection": "close",
-		"Content-Type": "application/x-www-form-urlencoded",
-		"User-Agent": user_agent
-	}
 
-	# make request
-	response, content = http.request(url_path, "POST", headers=headers, body=urlencode(body))
+        self.sales_and_trends_measures = {
+            'Units' : 'units_utc',
+            'Proceeds' : 'Royalty_utc',
+            'Sales' : 'total_tax_usd_utc'
+        }
 
-	print(response)
-	# pull out the cookie from the response
-	cookie_str = response["set-cookie"]
-	
-	# return parsed value
-	auth_cookie = parse_cookie_from_response(cookie_str)
-	store_auth_cookie(auth_cookie)
-	return auth_cookie
+        self.sales_and_trends_intervals = {
+            'Days' : 'day',
+            'Weeks' : 'week',
+            'Months' : 'month',
+            'Quarters' : 'quarter',
+            'Years' : 'year'
 
-################################# LIST APPS ####################################
+        }
 
-def list_apps():
-	cookie = get_auth_cookie()
+        with open('optionkeys.json','r') as jsonfile:
+            self.sales_and_trends_option_keys = json.load(jsonfile)
 
-	url_path = global_path + "/ra/apps/manageyourapps/summary"
+        self.index = 1457547810096
 
-	body = {}
+    def setup_session(self, accountName, password):
 
-	headers = {
-		"Cookie": cookie,
-		"Host": "itunesconnect.apple.com",
-		"Connection": "close",
-		"User-Agent": user_agent
-	}
+        self.session = session()
 
-	response, content = http.request(url_path, "GET", headers=headers, body=body)
+        payload = {
+            'accountName': accountName,
+            'password': password,
+            'rememberMe': False,
+        }
 
-	#content will contain the relevant details
-	jsonResp = json.loads(content.decode("utf-8"))
+        headers = {
+            'Content-Type':'application/json',
+            'X-Apple-Widget-Key':'22d448248055bab0dc197c6271d738c3',
+            'User-Agent':'Mozilla/5.0 (Windows NT 6.3; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/48.0.2564.116 Safari/537.36',
+            'Accept':'application/json',
+            'Referrer':'https://idmsa.apple.com',
+        }
 
-	app_list = jsonResp["data"]["summaries"]
+        r = self.session.post('https://idmsa.apple.com/appleauth/auth/signin', json=payload, headers=headers)
 
-	return app_list
+        r = self.session.get('https://itunesconnect.apple.com/WebObjects/iTunesConnect.woa')
+    
+        if 'myacinfo' not in self.session.cookies.get_dict().keys():
+            raise Exception('Didn\'t get the myacinfo cookie')
 
-################################# NEW VERSION ####################################
+        # Requests itunes connect page that will give us itCtx cookie needed for api requests
+        
+        r = self.session.get('https://itunesconnect.apple.com/WebObjects/iTunesConnect.woa', allow_redirects=False)
+    
+        if 'itctx' not in self.session.cookies.get_dict().keys():
+            raise Exception('Didn\'t obtain the itctx cookie')
 
-def new_version_for_app(app_id, version):
-	cookie = get_auth_cookie()
 
-	url_path = global_path + "/ra/apps/version/create/" + app_id
+    def get_apps(self):
 
-	body = { 
-		"version": version
-	}
+        headers = {
+            'Host':'analytics.itunes.apple.com',
+            'Origin':'https://analytics.itunes.apple.com',
+            'Referer':'https://analytics.itunes.apple.com/',
+            'User-Agent':'Mozilla/5.0 (Windows NT 6.3; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36',
+            'Upgrade-Insecure-Requests':1,
+            'X-Requested-By':'analytics.itunes.apple.com',
+            'Content-Type': 'application/json;charset=UTF-8',
+            'Accept': 'application/json'
+        }
 
-	headers = {
-		"Cookie": cookie,
-		"Host": "itunesconnect.apple.com",
-		"User-Agent": user_agent
-	}
+        r = self.session.get('https://analytics.itunes.apple.com/analytics/api/v1/app-info/app', headers=headers)
 
-	# make request
-	response, content = http.request(url_path, "POST", headers=headers, body=urlencode(body))
+        data = json.loads(r.text)
 
-	# pull out the cookie from the response
-	status = response["status"]
+        return data
 
-	if (status == 200):
-		print("Successfully created new version " + version + " for app " + app_id)
-	else:
-		print("Error creating version")
+    def get_adam_ids(self):
 
-def new_version_all_apps(version, release_notes):
-	# Get list of apps from iTunesConnect
-	all_apps = list_apps()
+        data = self.get_apps()
 
-	# Ignore apps that won't be updated
-	ignored_app_ids = ['553647769', '874966350', '888344666', '857823988', '785495390']
+        adamIds ={}
 
-	results = []
-	for app in all_apps:
-		app_id = app["adamId"]
+        for app in data['results']:
+            adamIds[app['adamId']] = app['name']
 
-		# Create the new version
-		if app_id not in ignored_app_ids:
-			new_version_for_app(app_id, version)
+        return adamIds
+
+    def get_app_analytics_data(self, adamId, startdate, enddate, measure, dimension):
+
+        startTime = startdate.strftime('%Y-%m-%dT%H:%M:%SZ')
+        endTime = enddate.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        payload = {
+            'adamId':[adamId],
+            'startTime':startTime,
+            'endTime':endTime,
+            'frequency':'DAY',
+            'measures':[self.app_analytics_measures[measure]],
+            'group':{
+                'metric':self.app_analytics_measures[measure],
+                'dimension':self.app_analytics_dimensions[dimension],
+                'rank':'DESCENDING',
+                'limit':3
+            },
+            'dimensionFilters':[]
+        }
+
+        payload = json.dumps(payload)
+
+        headers = {
+            'Host':'analytics.itunes.apple.com',
+            'Origin':'https://analytics.itunes.apple.com',
+            'Referer':'https://analytics.itunes.apple.com/',
+            'User-Agent':'Mozilla/5.0 (Windows NT 6.3; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36',
+            'Upgrade-Insecure-Requests':1,
+            'X-Requested-By':'analytics.itunes.apple.com',
+            'Content-Type': 'application/json;charset=UTF-8',
+            'Accept': 'application/json'
+        }
+
+        r = self.session.post('https://analytics.itunes.apple.com/analytics/api/v1/data/time-series', data=payload, headers=headers)
+
+        return r.text
+
+    def get_sales_and_trends_data(self, dimension, measure, interval, startdate, enddate, filters=None):
+
+        itunesfilters = []
+
+        if filters:
+            for dim, filtervalues in filters.items():
+                if filtervalues:
+                    itunesfilterval = {
+                        'dimension_key':self.sales_and_trends_dimensions[dim],
+                        'option_keys':[]
+                    }
+                    for filtervalue in filtervalues:
+                        itunesfilterval['option_keys'].append(self.sales_and_trends_option_keys[filtervalue])
+                    itunesfilters.append(itunesfilterval)
+
+        payload = {
+            'filters':itunesfilters,
+            'group':self.sales_and_trends_dimensions[dimension],
+            'interval':self.sales_and_trends_intervals[interval],
+            'start_date':startdate.strftime('%Y-%m-%dT%H:%M:%S.000Z'),
+            'end_date':enddate.strftime('%Y-%m-%dT%H:%M:%S.000Z'),
+            'sort':'descending',
+            'limit':100,
+            'measures':[self.sales_and_trends_measures[measure]]
+        }
+
+        r = self.session.post('https://reportingitc2.apple.com/api/data/timeseries', json=payload, headers=self.headers)
+
+        return r.text
+
+    def get_sales_and_trends_metadata(self):
+        r = self.session.get('https://reportingitc2.apple.com/api/all_metadata?_=%s' % self.index)
+        self.index += 1
+        return json.loads(r.text)
+
+    def get_sales_and_trends_metadata_options(self):
+
+        data = self.get_sales_and_trends_metadata()
+
+        optionkeys = {}
+
+        for dimension in data['dimensions']:
+            if dimension['type'] == 'options':
+                for option in dimension['options']:
+                    optionkeys[option['title']] = option['key']
+
+        return optionkeys
+
+    def get_latest_reported_earnings(self):
+
+        r = self.session.get('https://itunesconnect.apple.com/WebObjects/iTunesConnect.woa/da/jumpTo?page=paymentsAndFinancialReports')
+
+        tree = fromstring(r.text)
+
+        headings = tree.xpath("//div[@class='earnings-middle']//div[@class='heading']")
+        tables = tree.xpath("//div[@class='earnings-middle']//table")
+
+        earnings = {}
+
+        for heading, table in zip(headings, tables):
+            earnings[heading.text] = []
+            for row in table.xpath(".//tr"):
+                currency = unicode(row[0].text).strip()
+                amount = unicode(row[1].text).strip()
+                earnings[heading.text].append({currency : amount})
+
+        return earnings
+
+    def get_earnings(self, contentProviderId, vendornumber, year, month, path='output.zip'):
+
+        headers = {
+            'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Encoding':'gzip, deflate',
+            'Accept-Language':'en-US,en;q=0.8',
+            'Cache-Control':'max-age=0',
+            'Connection':'keep-alive',
+            'Content-Length':640,
+            'Content-Type':'multipart/form-data; boundary=----WebKitFormBoundaryq447WLYMWLPQsVFC',
+            'Host':'itunesconnect.apple.com',
+            'Origin':'https://itunesconnect.apple.com',
+            'Referer':'https://itunesconnect.apple.com/WebObjects/iTunesConnect.woa/wo/27.0.0.11.5.0.9.3.1',
+            'Upgrade-Insecure-Requests':1,
+            'User-Agent':'Mozilla/5.0 (Windows NT 6.3; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/47.0.2526.106 Safari/537.36'
+        }
+
+
+        regionCurrencyIds = [
+        10000,
+        10005,
+        10001,
+        10063,
+        10062,
+        10003,
+        10064,
+        10067,
+        10068,
+        10069,
+        10006,
+        10008,
+        10007,
+        10060,
+        10002,
+        10070,
+        10071,
+        10065,
+        10072,
+        10061,
+        10020,
+        10066,
+        10073,
+        10074,
+        10004]
+        
+        payload = {
+            'year':year,
+            'month':month,
+            'regionCurrencyIds': ','.join(str(i) for i in regionCurrencyIds),
+            'reportTypes':'FINANCIAL_REPORT'
+        }
+
+        url = 'https://itunesconnect.apple.com/WebObjects/iTunesConnect.woa/ra/paymentConsolidation/providers/%s/sapVendorNumbers/%s/reports' % (contentProviderId, vendornumber)
+
+        r = self.session.get(url, params=payload, headers=headers)
+
+        data = json.loads(r.text)
+        
+        print 'Sleeping for:', data['data']['estimatedWaitingTime']
+        time.sleep(data['data']['estimatedWaitingTime'])
+        
+        r = self.session.get('https://itunesconnect.apple.com/WebObjects/iTunesConnect.woa/wa/downloadBatchFinancialReport?uuid=%s' % data['data']['uuid'], headers=headers, stream=True)
+        
+        if r.status_code == 200:
+
+            with open(path, 'wb') as f:
+                shutil.copyfileobj(r.raw, f)
+        else:
+            raise Exception('Earnings report download failed')
+            
+
+    def get_user_info(self):
+        
+        r = self.session.get('https://itunesconnect.apple.com/WebObjects/iTunesConnect.woa/ra/user/detail')
+        
+        return json.loads(r.text)
+
+    def get_vendor_numbers(self, contentProviderId):
+        
+        r = self.session.get('https://itunesconnect.apple.com/WebObjects/iTunesConnect.woa/ra/paymentConsolidation/providers/%s/sapVendorNumbers' % contentProviderId)
+        
+        return json.loads(r.text)
+
+    def get_contentproviderids_and_vendornumbers(self):
+        
+        contentProviderIds = {}
+
+        userdata = self.get_user_info()
+        
+        for assoc_acc in userdata['data']['associatedAccounts']:
+
+            contentProviderId = assoc_acc['contentProvider']['contentProviderId']
+            
+            vendornumberdata = self.get_vendor_numbers(contentProviderId)
+
+            vendorNumbers = []
+            
+            for item in vendornumberdata['data']:
+                vendorNumbers.append(item['sapVendorNumber'])
+                
+            contentProviderIds[contentProviderId] = vendorNumbers
+            
+        return contentProviderIds
