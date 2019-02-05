@@ -8,7 +8,7 @@ setup(
     name="PyTunesConnect",
     version="0.0.1",
     author="Tom Bachant",
-    author_email="tombachant@gmail.com",
+    author_email="sridhar.p1987@gmail.com",
     py_modules=["pytunesconnect"],
     scripts=["scripts/pytunesconnect-list-apps",
              "scripts/pytunesconnect-login",
