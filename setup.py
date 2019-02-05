@@ -7,7 +7,7 @@ import os
 setup(
     name="PyTunesConnect",
     version="0.0.1",
-    author="Tom Bachant",
+    author="sridhar1989",
     author_email="sridhar.p1987@gmail.com",
     py_modules=["pytunesconnect"],
     scripts=["scripts/pytunesconnect-list-apps",
